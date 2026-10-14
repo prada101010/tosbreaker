@@ -1,31 +1,34 @@
-import { localized } from '../shared/i18n.js'
-import { Toggle } from '../shared/toggle.js'
-import { installEditHistory, trackEdit } from './history.js'
+import { cfg, saveCfg } from './config.js'
+import { recordMessage } from './record.js'
+import './store.js'
+import './history.js'
+import './viewer.js'
 
-// Tracking runs regardless of the toggle, so history exists by the time it is switched on.
-inu.onNewMessage((message, account) => trackEdit(message, account.id))
-inu.onMessageEdited((message, account) => trackEdit(message, account.id))
-
-const editHistory = new Toggle({
-  key: 'edit_history',
-  default: true,
-  text: localized('Edit History', 'История изменений'),
-  subtitle: localized(
-    'Keep previous message text versions, up to seven days.',
-    'Хранить предыдущие версии текста сообщений, до семи дней.',
-  ),
-  register: installEditHistory,
+inu.onNewMessage((msg, acc) => {
+  try {
+    recordMessage(acc, msg)
+  } catch {}
 })
 
-editHistory.init()
+inu.onMessageEdited((msg, acc) => {
+  try {
+    recordMessage(acc, msg, { edit: true })
+  } catch {}
+})
 
 inu.registerSettings(inu.ui.settingsPage({
-  title: localized('edit history', 'история изменений'),
+  title: 'inuEditHistory',
   items: () => [
-    editHistory.check(),
-    inu.ui.separator(localized(
-      'open a message menu to see its versions.',
-      'откройте меню сообщения, чтобы увидеть его версии.',
-    )),
+    inu.ui.header('Features'),
+    inu.ui.check({
+      id: 'edit-history',
+      text: 'Edited Message History',
+      icon: inu.icons.common('edit'),
+      checked: cfg.editHistory,
+      onChange: (val) => {
+        cfg.editHistory = val
+        saveCfg()
+      },
+    }),
   ],
 }))

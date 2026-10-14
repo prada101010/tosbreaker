@@ -1,101 +1,226 @@
-/*
- * Deleted-message bookkeeping.
- *
- * `updateDeleteMessages` carries only ids, and the app removes the bubble as soon as it applies
- * the update, so the ids are remembered in js and in a java HashSet the marking routine reads on
- * the app thread. Channel deletions name their channel, common-box ones do not; message ids are
- * unique per account, so the common box is tracked under `0`.
- */
+import type { DialogStore, IndexStore } from './config.js'
+import { CACHE_DIR, DLG_DIR, IDX_FILE, isEntryDeleted, MEDIA_DIR, TTL_MS } from './config.js'
+import { decodeJson, encodeJson } from './json.js'
+import { DELETED_MAP, isCommonBoxDialog, markJavaDeleted } from './state.js'
 
-import { writeCacheFile } from '../shared/cache-file.js'
-
-const deleted = new Map<string, DeletedRecord>()
-const CACHE_FILE = 'deleted-cache.json'
-const TTL = 7 * 24 * 60 * 60 * 1000
-let javaKeys: JavaObject | null = null
-let loaded = false
-let saveTimer: number | null = null
-
-interface DeletedRecord { accountId: number, dialogId: number, id: number, expires: number }
-
-const keyOf = (accountId: number, dialogId: number, id: number): string => `${accountId}:${dialogId}:${id}`
-
-function persistDeleted(): void {
-  saveTimer = null
-  const now = Date.now()
-  const records: DeletedRecord[] = []
-  for (const record of deleted.values()) {
-    if (record.expires > now) records.push(record)
-  }
+function ensureDirs(): void {
   try {
-    writeCacheFile(CACHE_FILE, records)
-  } catch (error) {
-    console.warn('deletedmessage: cache write failed', error)
-  }
+    if (!inu.fs.exists(CACHE_DIR)) inu.fs.mkdir(CACHE_DIR)
+    if (!inu.fs.exists(DLG_DIR)) inu.fs.mkdir(DLG_DIR)
+    if (!inu.fs.exists(MEDIA_DIR)) inu.fs.mkdir(MEDIA_DIR)
+  } catch {}
 }
 
-function scheduleSave(): void {
-  if (saveTimer === null) saveTimer = setTimeout(persistDeleted, 25)
+ensureDirs()
+
+// eslint-disable-next-line import/no-mutable-exports -- loadIndex() swaps the object in wholesale
+export let index: IndexStore = {
+  lastCleanup: 0,
+  msgToDialog: {},
+  deleted: {},
+  dialogs: {},
 }
 
-function recordDeletion(accountId: number, dialogId: number, ids: number[]): void {
-  const now = Date.now()
-  for (const id of ids) {
-    const key = keyOf(accountId, dialogId, id)
-    const record = deleted.get(key)
-    if (record === undefined || record.expires <= now) deleted.set(key, { accountId, dialogId, id, expires: now + TTL })
-    try { javaKeys?.call('add', key) } catch {}
-  }
-  scheduleSave()
+const memDialogs = new Map<string, DialogStore>()
+export const dirtySet = new Set<string>()
+let idxDirty = false
+let flushId: number | null = null
+
+/** record.ts mutates the index object; the flag itself has to be flipped from this module. */
+export function markIndexDirty(): void {
+  idxDirty = true
 }
 
-function loadDeleted(): void {
-  if (loaded) return
-  loaded = true
-  if (!inu.fs.exists(CACHE_FILE)) return
+export function dlgKey(accId: number, dlgId: number): string {
+  return `${accId}_${dlgId}`
+}
+
+function dlgPath(key: string): string {
+  return `${DLG_DIR}/${key}.json`
+}
+
+function loadIndex(): void {
   try {
-    const records = JSON.parse(new TextDecoder().decode(inu.fs.read(CACHE_FILE))) as DeletedRecord[]
-    const now = Date.now()
-    for (const record of records) {
-      if (typeof record.accountId !== 'number') continue
-      if (record.expires > now) deleted.set(keyOf(record.accountId, record.dialogId, record.id), record)
+    if (inu.fs.exists(IDX_FILE)) {
+      const data = decodeJson<IndexStore>(inu.fs.read(IDX_FILE))
+      if (data && typeof data === 'object') {
+        index = {
+          lastCleanup: data.lastCleanup ?? 0,
+          msgToDialog: data.msgToDialog ?? {},
+          deleted: data.deleted ?? {},
+          dialogs: data.dialogs ?? {},
+        }
+      }
     }
-    if (records.length !== deleted.size) scheduleSave()
-  } catch {
-    try { inu.fs.rm(CACHE_FILE) } catch {}
+  } catch {}
+
+  for (const item of Object.values(index.deleted)) {
+    if (typeof item.deletedAt === 'number' && item.deletedAt > 0) {
+      markJavaDeleted(item.dialogId, item.simpleId, item.msgId, isCommonBoxDialog(item.dialogId))
+    }
   }
 }
 
-function keySet(): JavaObject | null {
-  if (javaKeys !== null) return javaKeys
+loadIndex()
+
+export function getDialogStore(accId: number, dlgId: number): DialogStore {
+  const key = dlgKey(accId, dlgId)
+  const hit = memDialogs.get(key)
+  if (hit) return hit
+
+  const path = dlgPath(key)
+  if (inu.fs.exists(path)) {
+    try {
+      const data = decodeJson<DialogStore>(inu.fs.read(path))
+      if (data && data.messages) {
+        memDialogs.set(key, data)
+        return data
+      }
+    } catch {}
+  }
+
+  const store: DialogStore = {
+    accountId: accId,
+    dialogId: dlgId,
+    simpleId: inu.utils.peers.toSimpleDialogId(dlgId),
+    updatedAt: Date.now(),
+    messages: {},
+    users: {},
+    chats: {},
+  }
+  memDialogs.set(key, store)
+  return store
+}
+
+function flushDisk(): void {
+  if (flushId !== null) {
+    clearTimeout(flushId)
+    flushId = null
+  }
+  ensureDirs()
+
+  for (const key of dirtySet) {
+    const store = memDialogs.get(key)
+    if (!store) continue
+    try {
+      inu.fs.write(dlgPath(key), encodeJson(store))
+      index.dialogs[key] = store.updatedAt
+      idxDirty = true
+    } catch {}
+  }
+  dirtySet.clear()
+
+  if (idxDirty) {
+    try {
+      inu.fs.write(IDX_FILE, encodeJson(index))
+      idxDirty = false
+    } catch {}
+  }
+
+  if (memDialogs.size > 24) {
+    const keys = Array.from(memDialogs.keys())
+    for (let i = 0; i < keys.length - 16; i++) {
+      if (!dirtySet.has(keys[i])) memDialogs.delete(keys[i])
+    }
+  }
+}
+
+export function scheduleFlush(now = false): void {
+  if (now) {
+    flushDisk()
+    return
+  }
+  if (flushId !== null) return
+  flushId = setTimeout(() => {
+    flushId = null
+    flushDisk()
+  }, 1500)
+}
+
+function purgeExpired(): void {
+  const now = Date.now()
+  if (now - index.lastCleanup < 3600_000) return
+  const cutoff = now - TTL_MS
+
+  for (const [k, v] of Object.entries(index.deleted)) {
+    if (v.deletedAt < cutoff) {
+      delete index.deleted[k]
+      DELETED_MAP.call('remove', `${v.simpleId}:${v.msgId}`)
+      DELETED_MAP.call('remove', `${v.dialogId}:${v.msgId}`)
+      DELETED_MAP.call('remove', `0:${v.msgId}`)
+      idxDirty = true
+    }
+  }
+
+  for (const [key, upd] of Object.entries(index.dialogs)) {
+    const path = dlgPath(key)
+    if (!inu.fs.exists(path)) {
+      delete index.dialogs[key]
+      idxDirty = true
+      continue
+    }
+    if (upd < cutoff) {
+      try {
+        const store = decodeJson<DialogStore>(inu.fs.read(path))
+        for (const rec of Object.values(store.messages ?? {})) {
+          if (rec.mediaPath && inu.fs.exists(rec.mediaPath)) inu.fs.rm(rec.mediaPath)
+          delete index.msgToDialog[`${store.accountId}:${rec.raw.id}`]
+        }
+      } catch {}
+      inu.fs.rm(path)
+      memDialogs.delete(key)
+      dirtySet.delete(key)
+      delete index.dialogs[key]
+      idxDirty = true
+      continue
+    }
+
+    try {
+      const [aStr, dStr] = key.split('_')
+      const store = getDialogStore(Number(aStr), Number(dStr))
+      let mod = false
+      for (const [mId, rec] of Object.entries(store.messages)) {
+        const ts = isEntryDeleted(rec) ? (rec.deletedAt as number) : rec.cachedAt
+        if (ts < cutoff) {
+          if (rec.mediaPath && inu.fs.exists(rec.mediaPath)) inu.fs.rm(rec.mediaPath)
+          delete store.messages[Number(mId)]
+          delete index.msgToDialog[`${store.accountId}:${mId}`]
+          mod = true
+        }
+      }
+      if (mod) {
+        if (Object.keys(store.messages).length === 0) {
+          inu.fs.rm(path)
+          memDialogs.delete(key)
+          dirtySet.delete(key)
+          delete index.dialogs[key]
+        } else {
+          dirtySet.add(key)
+        }
+        idxDirty = true
+      }
+    } catch {}
+  }
+
   try {
-    // SAFETY: unsafe.jvm: the marking routine runs on the app thread and can't call into js, so the
-    // recorded keys live in a java HashSet it can read directly
-    javaKeys = new (inu.jvm.cls('java.util.HashSet'))()
-    for (const key of deleted.keys()) javaKeys.call('add', key)
-    return javaKeys
-  } catch {
-    return null
-  }
+    if (inu.fs.exists(MEDIA_DIR)) {
+      for (const f of inu.fs.readdir(MEDIA_DIR)) {
+        const p = `${MEDIA_DIR}/${f}`
+        if (inu.fs.stat(p).mtime < cutoff) inu.fs.rm(p)
+      }
+    }
+  } catch {}
+
+  index.lastCleanup = now
+  idxDirty = true
+  flushDisk()
 }
 
-/** The recorded keys as a java HashSet the marking routine can capture; `null` when jvm is unavailable. */
-export function deletedKeySet(): JavaObject | null {
-  loadDeleted()
-  return keySet()
-}
-
-export function recordChannelDeletion(accountId: number, channelId: number, ids: number[]): void {
-  recordDeletion(accountId, -channelId, ids)
-  recordDeletion(accountId, channelId, ids)
-}
-
-export function recordCommonBoxDeletion(accountId: number, ids: number[]): void {
-  recordDeletion(accountId, 0, ids)
-}
+const initTimer = setTimeout(purgeExpired, 4000)
+const loopTimer = setInterval(purgeExpired, 6 * 3600_000)
 
 inu.onUnload(() => {
-  if (saveTimer === null) return
-  clearTimeout(saveTimer)
-  persistDeleted()
+  clearTimeout(initTimer)
+  clearInterval(loopTimer)
+  flushDisk()
 })

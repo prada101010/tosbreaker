@@ -1,44 +1,40 @@
-import { localized } from '../shared/i18n.js'
-import { Toggle } from '../shared/toggle.js'
-import { installDeletedMarking, setDeletedMarking } from './mark.js'
-import { recordChannelDeletion, recordCommonBoxDeletion } from './store.js'
+import { refreshCells } from './cells.js'
+import { cfg, saveCfg } from './config.js'
+import { recordMessage } from './record.js'
+import { uiHandler } from './state.js'
+import './store.js'
+import './deletions.js'
+import './history.js'
+import './viewer.js'
 
-const keepDeleted = new Toggle({
-  key: 'keep_deleted',
-  default: true,
-  text: localized('Keep deleted messages', 'Оставлять удалённые сообщения'),
-  subtitle: localized(
-    'Keep deleted messages visible and dim them.',
-    'Оставлять удалённые сообщения видимыми и затенять их.',
-  ),
-  register: () => inu.interceptUpdate(
-    ['updateDeleteMessages', 'updateDeleteChannelMessages'],
-    (context) => {
-      const update = context.update
-      if (update._ === 'updateDeleteChannelMessages') recordChannelDeletion(context.account.id, update.channel_id, update.messages)
-      else recordCommonBoxDeletion(context.account.id, update.messages)
-      return 'drop'
-    },
-  ),
-  onChange: on => setDeletedMarking(on),
+inu.onNewMessage((msg, acc) => {
+  try {
+    recordMessage(acc, msg)
+  } catch {}
 })
 
-keepDeleted.init()
-
-/*
- * The marking hooks stay installed for the plugin's lifetime: `onDraw` resets every cell's alpha on
- * each frame, so disposing them mid-session would leave a dimmed bubble dim. The toggle only flips
- * the captured AtomicBoolean.
- */
-installDeletedMarking(keepDeleted.active)
+inu.onMessageEdited((msg, acc) => {
+  try {
+    recordMessage(acc, msg)
+  } catch {}
+})
 
 inu.registerSettings(inu.ui.settingsPage({
-  title: localized('deleted messages', 'удалённые сообщения'),
+  title: 'inuDeleted',
   items: () => [
-    keepDeleted.check(),
-    inu.ui.separator(localized(
-      'kept bubbles disappear once the chat is refetched from the server.',
-      'сохранённые сообщения исчезнут, как только чат обновится с сервера.',
-    )),
+    inu.ui.header('Features'),
+    inu.ui.check({
+      id: 'see-deleted',
+      text: 'See Deleted Message',
+      icon: inu.icons.common('delete'),
+      checked: cfg.seeDeleted,
+      onChange: (val) => {
+        cfg.seeDeleted = val
+        saveCfg()
+        try {
+          uiHandler.call('post', refreshCells)
+        } catch {}
+      },
+    }),
   ],
 }))

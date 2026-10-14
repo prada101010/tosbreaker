@@ -38,25 +38,36 @@ or messages.
 
 ## `deletedmessage`
 
-needs `unsafe.jvm` + `unsafe.xposed`: the delete update is dropped before the app applies it, and
-marking the kept bubble is a drawing-time change in app ui code, no public plugin api reaches it.
+needs `unsafe.jvm` + `unsafe.xposed`: the delete notifications are dropped before the app applies
+them, and marking the kept bubble is a drawing-time change in app ui code, no public plugin api
+reaches either.
 
 - keep deleted messages: `updateDeleteMessages`/`updateDeleteChannelMessages` answer as dropped,
-  and their ids are remembered in the plugin's private directory for seven days. the app leaves the
-  bubble on screen
-- dimming: `ChatMessageCell.setMessageObject`/`onDraw` run a compiled routine that reads the kept
-  ids from a java `HashSet` and sets the bubble alpha to 50%, resetting it from the cell's current
-  message on every draw so recycled cells don't leak. the toggle flips a captured `AtomicBoolean`,
-  so it is instant and a dimmed bubble resets on its next draw
+  together with the same updates inside `updates.getDifference`/`updates.getChannelDifference` while
+  catching up. ids and raw messages go to the plugin's private directory for 30 days and the app
+  leaves the bubble on screen
+- the user's own deletes still go through: `messages.deleteMessages`/`channels.deleteMessages` and
+  `MessagesController.deleteMessages` mark them first, so those are delivered untouched
+- the app's own delete notification is swallowed too (`postNotificationNameInternal`,
+  `ChatActivity.didReceivedNotification` and `MessagesStorage.markMessagesAsDeleted`), which is what
+  keeps the bubble from disappearing
+- reloads: kept messages are merged back into `messages.getHistory`, and `messageEmpty` slots in
+  `messages.getMessages`/`channels.getMessages` are replaced, so they reappear after a restart.
+  downloaded media (up to 15 MB per message) is restored with them, `ttl_seconds` stripped
+- dimming: `ChatMessageCell.measureTime`/`onMeasure`/`onDraw`/`setMessageObject` run compiled
+  routines that read the kept ids from a java `HashSet`, fade the bubble to 55% and draw a trash
+  glyph after it. `View.setAlpha`/`setMessageObject` reset a recycled cell from its current message
+  so the dimming never leaks. a "Deleted Messages" chat action lists them in a synthetic page
+- settings: "See Deleted Message", on by default, flips a captured java flag, so it is instant and a
+  dimmed bubble resets on its next draw
 
 ## `edithistory`
 
-no unsafe grants: the whole feature is public plugin api (`onUpdate`, `registerMessageAction`,
-`openChatHistory` and `fs`).
+no unsafe grants: the whole feature is public plugin api (`onUpdate`, `interceptRpc`,
+`registerMessageAction`, `openChatHistory` and `fs`).
 
-- edit history: snapshots every message (`onNewMessage`) and, on `onMessageEdited`, keeps the
-  previous version before refreshing it. formatting-only edits (entity changes) count too, so a
-  snapshot compares text and entities
+- edit history: snapshots every message (`onNewMessage`, plus `messages.getHistory` when a dialog is
+  open) and, on `onMessageEdited`, keeps the previous version before refreshing it. the comparison is
+  text only, so formatting-only edits (entity changes) do not count
 - "edit history" in the message menu opens the stored versions in a synthetic chat page, newest
-  first. at most 50 versions per message, 2000 overall and 500 snapshots, all expiring after seven
-  days
+  first. at most 30 versions per message, all expiring after 30 days

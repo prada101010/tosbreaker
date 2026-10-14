@@ -83,6 +83,9 @@ export default defineConfig({
         icon: 'inu://delete',
         grants: [
           'interceptUpdate(updateDeleteMessages,updateDeleteChannelMessages)',
+          'interceptRpc(messages.deleteMessages,channels.deleteMessages,updates.getDifference,updates.getChannelDifference,messages.getHistory,messages.getMessages,channels.getMessages)',
+          'onUpdate(new_message,edit_message)',
+          'account.read(peers,messages)',
           'fs',
           'unsafe.jvm',
           'unsafe.xposed',
@@ -103,6 +106,8 @@ export default defineConfig({
         icon: 'inu://edit',
         grants: [
           'onUpdate(new_message,edit_message)',
+          'interceptRpc(messages.getHistory)',
+          'account.read(peers)',
           'fs',
         ],
       },
