@@ -18,8 +18,8 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "^8.3.0",
-    "@inugram/cli": "^44.0.0",
-    "@inugram/plugin-types": "^44.0.0",
+    "@inugram/cli": "^47.0.0",
+    "@inugram/plugin-types": "^47.0.0",
     "@types/node": "^24.13.6",
     "eslint": "^10.11.0",
     "eslint-plugin-slop": "^0.1.3",
