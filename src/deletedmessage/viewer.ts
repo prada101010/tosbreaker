@@ -25,17 +25,15 @@ inu.registerChatAction({
       account: ctx.account.id,
       synthetic: true,
       avatars: ctx.dialogId < 0,
-      // v44 SDK takes a single `load(cursor, direction)` provider; v45's loadAround/loadMore collapse into it
-      load: cursor => (cursor !== null
-        ? { entries: [] }
-        : {
-            entries: list.slice(0, 200).map(r => ({
-              key: `${ctx.dialogId}:${r.raw.id}`,
-              message: cloneTl(r.raw),
-            })),
-            users: Object.values(store.users).map(u => cloneTl(u)),
-            chats: Object.values(store.chats).map(c => cloneTl(c)),
-          }),
+      loadAround: () => ({
+        entries: list.slice(0, 200).map(r => ({
+          key: `${ctx.dialogId}:${r.raw.id}`,
+          message: cloneTl(r.raw),
+        })),
+        users: Object.values(store.users).map(u => cloneTl(u)),
+        chats: Object.values(store.chats).map(c => cloneTl(c)),
+      }),
+      loadMore: () => ({ entries: [] }),
     })
   },
 })

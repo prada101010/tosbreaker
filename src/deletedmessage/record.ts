@@ -10,7 +10,7 @@ function savePeer(acc: inu.Account, store: DialogStore, peerId: number | null): 
     const p = acc.getPeer(peerId)
     if (!p) return
     if (p._ === 'user' && !store.users[p.id]) store.users[p.id] = cloneTl(p)
-    // `p._ !== 'user'` also covers the other user variants, so narrow for the typed store
+    // the SDK types peer ids as string | number; store keys stay numeric
     else if (p._ !== 'user' && !store.chats[Number(p.id)]) store.chats[Number(p.id)] = cloneTl(p) as tl.TypeChat
   } catch {}
 }
