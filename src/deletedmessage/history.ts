@@ -52,14 +52,14 @@ inu.interceptRpc('messages.getHistory', async (ctx, next) => {
     const hi = (req.offset_id > 0 && addOffset >= 0)
       ? Math.max(req.offset_id, maxId)
       : (req.max_id > 0 ? req.max_id : Number.MAX_SAFE_INTEGER)
-    const lo = list.length >= limit && minId < Number.MAX_SAFE_INTEGER ? minId : (req.min_id > 0 ? req.min_id : 0)
+    const lo = req.min_id > 0 ? req.min_id : 0
 
     const inject: tl.TypeMessage[] = []
     for (const rec of Object.values(store.messages)) {
       if (!isEntryDeleted(rec)) continue
       const id = rec.raw.id
       markJavaDeleted(dlgId, store.simpleId, id, isCommonBoxDialog(dlgId))
-      if (seen.has(id) || id > hi || id < lo) continue
+      if (seen.has(id) || id > hi) continue
       const copy = cloneTl(rec.raw)
       if (copy._ === 'message' && copy.media) delete (copy.media as any).ttl_seconds
       inject.push(copy)

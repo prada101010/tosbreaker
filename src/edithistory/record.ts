@@ -47,12 +47,22 @@ export function recordMessage(
   const prev = store.messages[msgId]
   const edits = prev !== undefined && Array.isArray(prev.edits) ? [...prev.edits] : []
 
+  function mediaSig(r: any): string {
+    const m = r?.media
+    if (!m) return ''
+    if (m._ === 'messageMediaPhoto' && m.photo) return `photo:${m.photo.id}:${m.photo.access_hash ?? ''}`
+    if (m._ === 'messageMediaDocument' && m.document) return `doc:${m.document.id}:${m.document.access_hash ?? ''}`
+    if (m._ === 'messageMediaWebPage' && m.webpage) return `web:${m.webpage.id ?? m.webpage.url ?? ''}`
+    try { return JSON.stringify(m) } catch { return '' }
+  }
+
   if (prev !== undefined && prev.raw._ === 'message' && raw._ === 'message') {
     const oldText = prev.raw.message ?? ''
     const newText = raw.message ?? ''
     const oldEditDate = prev.raw.edit_date ?? 0
     const newEditDate = raw.edit_date ?? 0
-    if ((opts?.edit === true || newEditDate > oldEditDate) && oldText !== newText) {
+    const contentChanged = oldText !== newText || mediaSig(prev.raw) !== mediaSig(raw)
+    if ((opts?.edit === true || newEditDate > oldEditDate) && contentChanged) {
       edits.push(cloneTl(prev.raw))
       if (edits.length > 30) edits.shift()
     }

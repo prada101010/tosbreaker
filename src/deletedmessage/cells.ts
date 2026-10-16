@@ -103,7 +103,7 @@ const onMeasureTime = inu.xposed.routine((ctx) => {
     }
 
     const id = msg.getId()
-    if (id <= 0 || msg.isOutOwner()) {
+    if (id <= 0) {
       if (STYLED_CELLS.containsKey(hash)) {
         STYLED_CELLS.remove(hash)
         TRASH_WIDTH_MAP.remove(hash)
@@ -157,7 +157,7 @@ const onMeasureTime = inu.xposed.routine((ctx) => {
     if (cur === null || cur.toString().startsWith('\u200B')) return
 
     const beforeTrashW = cell.timeTextWidth
-    const ssb = new SsbCls('\u200B\uFFFC ')
+    const ssb = new SsbCls('\u200B\uFFFC\u00A0 ')
     ssb.setSpan(new TrashSpan(), 1, 2, 33)
     ssb.append(cur)
     cell.currentTimeString = ssb
@@ -252,7 +252,7 @@ const onBindCell = inu.xposed.routine((ctx) => {
     }
 
     const id = msg.getId()
-    if (id <= 0 || msg.isOutOwner()) {
+    if (id <= 0) {
       if (STYLED_CELLS.containsKey(hash)) {
         STYLED_CELLS.remove(hash)
         TRASH_WIDTH_MAP.remove(hash)
@@ -261,7 +261,7 @@ const onBindCell = inu.xposed.routine((ctx) => {
       const cur = cell.currentTimeString
       if (cur !== null && cur.toString().startsWith('\u200B')) {
         cell.currentTimeString = cur.subSequence(3, cur.length())
-        cell.measureTime(msg)
+        TRASH_WIDTH_MAP.remove(hash)
       }
       return
     }
@@ -285,7 +285,7 @@ const onBindCell = inu.xposed.routine((ctx) => {
       const cur = cell.currentTimeString
       if (cur !== null && cur.toString().startsWith('\u200B')) {
         cell.currentTimeString = cur.subSequence(3, cur.length())
-        cell.measureTime(msg)
+        TRASH_WIDTH_MAP.remove(hash)
       }
       return
     }
@@ -315,7 +315,7 @@ export const refreshCells = inu.jvm.routine(function () {
       const id = msg.getId()
       const dlg = msg.getDialogId()
       let tag = null
-      if (id > 0 && !msg.isOutOwner()) {
+      if (id > 0) {
         tag = DELETED_MAP.get('' + dlg + ':' + id)
         if (tag === null) {
           const owner = msg.messageOwner
